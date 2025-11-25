@@ -20,7 +20,6 @@ const int NUM_TEAMS = 4;     // number of teams in the race
 const int NUM_MEMBERS = 4;    // number of athletes in the team
 
 using namespace std;
-
 // Data for team/athelete initialisation. The Women’s 4x100 meter relay at the Tokyo 2020 Olympics. The teams took between 41 and 42 seconds.
 std::array <string, 4> astrTeams = { "Jamaica", "United States", "Great Britain", "Switzerland" };
 
@@ -90,28 +89,42 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
     //Part 2.2 Copy the code from thd_runner_16x100m for
         // barrier_allthreads_started
         // barrier_go
-    thrd_print(a.getPerson() + " started, ");
+
+    barrier_allthreads_started.arrive_and_wait();
+    barrier_go.arrive_and_wait();
+
+   
+
+
     // If the competitor does not have a pointer to a previous competitor, then it must be the first runner of that team.
     if ( pPrevA == NULL)  thrd_print(a.getPerson() + " started, ");
     else { // If they are not the first runner in that team, then they need to wait for the previous runner to give them the baton.
         { // Brackets to reduce mutex scope
             //Part 2.3 Create a std::unique_lock<std::mutex> called "lock", initialised with pPrevA->mtx mutex
+            std::unique_lock<std::mutex> lock(pPrevA->mtx);
+
             //Part 2.4 Complete the pPrevA->baton condition_variable line below to wait on that lock. (use the pPrevA->bFinished as the check function. It is tricky to get the lambda right!)
             // pPrevA->baton.wait(lock, ... Complete this bit ... }); // Wait for the baton to arrive.
+            pPrevA->baton.wait(lock, [pPrevA]{return pPrevA->bFinished;} );
         }
         thrd_print( a.getPerson() +" ("+ a.getTeamName() + ")" +" took the baton from " + pPrevA->getPerson() +" ("+pPrevA->getTeamName() + ")\n");
     }
     //Part 2.5 Copy the code from thd_runner_16x100m for fSprintDuration_seconds and std::this_thread::sleep_for
-    float fSprintDuration_seconds = -1; // Delete this line, it is just here to let the code compile
-        // The fSprintDuration_seconds
-        // The std::this_thread::sleep_for
+    
+    
+    float fSprintDuration_seconds = generator.generate();
+    int fSprintDuration_miliseconds = fSprintDuration_seconds * 1000;
+    std::this_thread::sleep_for(std::chrono::milliseconds(fSprintDuration_miliseconds));
+
+    
+  
     a.setTime(fSprintDuration_seconds);
     thrd_print( "Leg "+ std::to_string(a.numBatonExchanges()) + ": "+a.getPerson() + " ran in " + std::to_string(fSprintDuration_seconds) + " seconds. ("+ a.getTeamName() + ")\n");
     if ( a.numBatonExchanges() == NUM_MEMBERS) // The last athlete in the team has crossed the finish line (crossing the line counts as a baton exchage)
     {
         // Print "finished" only if this is the first thread to complete
         //Part 2.6 Use an atomic .exchange on the atomic "winner" object that you defined at the top of this code and use this in the line below
-        // if (!winner. ...) // Uncomment this line
+         if (!winner.exchange(true)) // Uncomment this line
         {
             std::cout << "\n Team " << a.getTeamName() << " is the WINNER!" << std::endl;
         }
@@ -131,7 +144,7 @@ int main() {
 
     std::cout << "Re-run of the women’s 4x100 meter relay at the Tokyo 2020 Olympics.\n" << std::endl;
     // Start threads in each position of the 2D array
-    for (int i = 0; i < NUM_TEAMS; ++i) {
+    for (int i = 0; i < NUM_TEAMS; ++i){
         //string strTeam = astrTeams[i];
         afTeamTime_s[i] = 0;
         aTeams[i].setTeam(astrTeams[i]);
@@ -143,12 +156,13 @@ int main() {
             // THIS IS FOR PART 1  //Part 1.8 Remove the sequential call line above, with the multithreaded one below
                 // thread_competitor[i][j] = std::thread(thd_runner_16x100m, ....
                 //thread_competitor[i][j] = std::thread(thd_runner_16x100m, std::ref(athlete[i][j]), std::ref(randGen_sprint_time) );  // Run the atheletes all together (16x100m)
-            thread_competitor[i][j] = std::thread(thd_runner_16x100m, std::ref(athlete[i][j]), std::ref(randGen_sprint_time) );
+            // for the non relay race
+            //thread_competitor[i][j] = std::thread(thd_runner_16x100m, std::ref(athlete[i][j]), std::ref(randGen_sprint_time) );
 
-            // THIS IS FOR PART 2
+            // for the relay race
                 //Part 2.7 Start the thd_runner_4x4x100m instead. If it is the first runner of the team (j==0) then Competitor *pPrevA should be NULL, otherwide it should be the previous runner (Competitor *)&(athlete[i][j-1])
-                    //if ( j==0 )  thread_competitor[i][j] = ....    // First runner in team
-                    //else  thread_competitor[i][j] = ....   // Passed baton
+            if ( j==0 ) thread_competitor[i][j] = std::thread(thd_runner_4x4x100m, std::ref(athlete[i][j]), nullptr, std::ref(randGen_sprint_time) );
+                else  thread_competitor[i][j] = std::thread(thd_runner_4x4x100m, std::ref(athlete[i][j]), (Competitor *)&(athlete[i][j-1]), std::ref(randGen_sprint_time));   // Passed baton
         }
     }
 
