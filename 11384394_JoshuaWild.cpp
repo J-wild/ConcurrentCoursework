@@ -14,6 +14,7 @@
 #include "cs_helper_DoNotModify.hpp"
 #include <array>
 #include <atomic>
+#include <vector>
 
 
 const int NUM_TEAMS = 4;     // number of teams in the race
@@ -32,6 +33,8 @@ std::array< std::array<std::string, 4>, 4> aastrCompetitors = {{
     { "Philip", "Lansiquot", "Asher-Smith", "Neita" },
     { "Del-Ponte", "Kambundji", "Kora", "Dietsche" }
 }};
+
+std::vector<string> DisqualifiedTeams;
 
 
 class RandomTwister{
@@ -72,6 +75,7 @@ void thd_runner_16x100m(Competitor& a, RandomTwister& generator) {
     // Wait for all *17* threads to ensure that all threads have started (all athletes are on their starting blocks!)
     //Part 1.4 Apply the barrier_allthreads_started using arrive_and_wait().
     barrier_allthreads_started.arrive_and_wait();
+    
 
     // Wait at the barrier until all threads are running (including the main thread this is 16+1)
     // Wait for the starter gun to fire (all threads will be waiting while the random countdown for the starting pistol). Then the main thread also waits making 17 threads and this allows them all to started running
@@ -95,29 +99,34 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
     //Part 2.2 Copy the code from thd_runner_16x100m for
         // barrier_allthreads_started
         // barrier_go
-
     barrier_allthreads_started.arrive_and_wait();
     barrier_go.arrive_and_wait();
 
-   
 
-
+    
+    
     float Penalty = 0.0f;
     // If the competitor does not have a pointer to a previous competitor, then it must be the first runner of that team.
-    if ( pPrevA == NULL)  thrd_print(a.getPerson() + " started, ");
-    else { // If they are not the first runner in that team, then they need to wait for the previous runner to give them the baton.
-        { // Brackets to reduce mutex scope
+    if ( pPrevA == NULL)  thrd_print(a.getPerson() + " started,\n");
+    else {
+         // If they are not the first runner in that team, then they need to wait for the previous runner to give them the baton.
+         // Brackets to reduce mutex scope
             //Part 2.3 Create a std::unique_lock<std::mutex> called "lock", initialised with pPrevA->mtx mutex
 
-
-
-
-            std::unique_lock<std::mutex> lock(pPrevA->mtx);
-    
+            std::unique_lock<std::mutex> lock(pPrevA->mtx);        
             //Part 2.4 Complete the pPrevA->baton condition_variable line below to wait on that lock. (use the pPrevA->bFinished as the check function. It is tricky to get the lambda right!)
             // pPrevA->baton.wait(lock, ... Complete this bit ... }); // Wait for the baton to arrive.
             pPrevA->baton.wait(lock, [pPrevA]{return pPrevA->bFinished;} );
+            
 
+                
+            if (pPrevA->getTime() == 0.0f){
+                a.bFinished = true;
+                a.baton.notify_one();
+                //thrd_print("\n" + a.getPerson() + " (" + a.getTeamName() + ") is skipping - Team pre-disqualified.\n");
+                return;
+            }
+    
             
 
             //See if they droipped the batton
@@ -126,59 +135,64 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
             if (ProbOfDrop <= 0.2f && ProbOfDrop >= 0.05f){
                 Penalty = ProbOfDrop * 10;
                 thrd_print(a.getPerson() + "(" + a.getTeamName() + ")" + "Dropped the batton, adding a penalty of " + std::to_string(Penalty) +" Seconds \n" );
-                }
+            }
             
-            else if(ProbOfDrop <= 0.05f){
-                thrd_print(a.getPerson() + "(" + a.getTeamName() + ")" + "Dropped the batton, so bad their Team is Disqalified \n" );
+            if(ProbOfDrop <= 0.05f){
+                thrd_print(a.getPerson() + " (" + a.getTeamName() + ") " + "Dropped the batton, so bad their Team is Disqalified \n" );
                 a.bFinished = true;
                 a.baton.notify_one();
+                DisqualifiedTeams.push_back(a.getTeamName());
                 return;
             }
-        
 
-
-
+            thrd_print( a.getPerson() +" ("+ a.getTeamName() + ")" +" took the baton from " + pPrevA->getPerson() +" ("+pPrevA->getTeamName() + ")\n");
+            
         }
+   
 
-        thrd_print( a.getPerson() +" ("+ a.getTeamName() + ")" +" took the baton from " + pPrevA->getPerson() +" ("+pPrevA->getTeamName() + ")\n");
-    }
-
-
-
+    
     //Part 2.5 Copy the code from thd_runner_16x100m for fSprintDuration_seconds and std::this_thread::sleep_for
     
     float fSprintDuration_seconds = generator.generate();
-    int fSprintDuration_miliseconds = fSprintDuration_seconds * 1000;
+    int fSprintDuration_miliseconds = (fSprintDuration_seconds + Penalty) * 1000;
     std::this_thread::sleep_for(std::chrono::milliseconds(fSprintDuration_miliseconds));
-
     
-    
-        a.setTime(fSprintDuration_seconds + Penalty);
-
-        thrd_print( "Leg "+ std::to_string(a.numBatonExchanges()) + ": "+a.getPerson() + " ran in " + std::to_string(fSprintDuration_seconds) + " seconds. ("+ a.getTeamName() + ")\n");
-        if ( a.numBatonExchanges() == NUM_MEMBERS) // The last athlete in the team has crossed the finish line (crossing the line counts as a baton exchage)
+    a.setTime(fSprintDuration_seconds + Penalty);
+    thrd_print( "Leg "+ std::to_string(a.numBatonExchanges()) + ": "+a.getPerson() + " ran in " + std::to_string(fSprintDuration_seconds) + " seconds. ("+ a.getTeamName() + ")\n");
+    if ( a.numBatonExchanges() == NUM_MEMBERS) // The last athlete in the team has crossed the finish line (crossing the line counts as a baton exchage)
+    {
+        
+        // Print "finished" only if this is the first thread to complete
+        //Part 2.6 Use an atomic .exchange on the atomic "winner" object that you defined at the top of this code and use this in the line below
+        if (!winner.exchange(true)) // Uncomment this line
         {
-            // Print "finished" only if this is the first thread to complete
-            //Part 2.6 Use an atomic .exchange on the atomic "winner" object that you defined at the top of this code and use this in the line below
-            if (!winner.exchange(true)) // Uncomment this line
-            {
-                std::cout << "\n Team " << a.getTeamName() << " is the WINNER!" << std::endl;
-            }
+            std::cout << "\n Team " << a.getTeamName() << " is the WINNER!" << std::endl;
         }
+
+
+    }
+    
 
 }
 
+bool isDisqualified(string team){
+    for (auto j: DisqualifiedTeams){
+        if (j == team) return true;
 
+    }
+    return false;
+
+}
 
 int main() {
-    thread     thread_competitor[NUM_TEAMS][NUM_MEMBERS];   // 2D array of threads.
-    Team aTeams[NUM_TEAMS];                                 // Can be global
-    Competitor athlete[NUM_TEAMS][NUM_MEMBERS];             // 2D array of Competitors.
-    float afTeamTime_s[NUM_TEAMS];
+    thread      thread_competitor[NUM_TEAMS][NUM_MEMBERS];   // 2D array of threads.
+    Team        aTeams[NUM_TEAMS];                           // Can be global
+    Competitor  athlete[NUM_TEAMS][NUM_MEMBERS];             // 2D array of Competitors.
+    float       afTeamTime_s[NUM_TEAMS];
 
     // Part 1.7   Change the random number generation to between 10 s and 12 s.  (you might want to do this later so you don't have to wait while you are debugging!)
     RandomTwister randGen_sprint_time(0.5f, 1.0f);
-    RandomTwister randGen_drop_chance(0.0f, 0.05f);
+    RandomTwister randGen_drop_chance(0.0f, 0.5f);
 
     std::cout << "Re-run of the women’s 4x100 meter relay at the Tokyo 2020 Olympics.\n" << std::endl;
     // Start threads in each position of the 2D array
@@ -207,12 +221,14 @@ int main() {
     // Wait for all threads to be running including the main thread
     //Part 1.9  Apply the barrier_allthreads_started arrive_and_wait here to wait for all threads to be created (16 threads + this main thread = 17)
                     // Wait at the barrier until all threads arrive
-
     barrier_allthreads_started.arrive_and_wait();
 
     thrd_print("\n\nThe race official raises her starting pistol...\n");
     //Part 2.8 Change this starter gun time from the fixed 3.5 seconds (next line) to a random value between 3 to 5 seconds.
-    float fStarterGun_s=3.5;
+
+    RandomTwister randGen_gun_time(3.0f, 5.0f);
+    float fStarterGun_s = randGen_gun_time.generate();
+
     //Part 1.10 Sleep using std::this_thread::sleep_for function for the fStarterGun_s  (see advice on type conversion given above)
     int fStarterGun_ms = fStarterGun_s * 1000;
     std::this_thread::sleep_for(std::chrono::milliseconds(fStarterGun_ms));
@@ -230,7 +246,17 @@ int main() {
     }
     // Print the results for each team
     std::cout << "\n\nTEAM RESULTS" << std::endl;
-    for (int i = 0; i < NUM_TEAMS; ++i)  aTeams[i].printTimes();
+
+    for (int i = 0; i < NUM_TEAMS; ++i){
+        
+        if (isDisqualified(astrTeams[i])){//
+            thrd_print( "Team "  + astrTeams[i] + " =  Disqalified \n");
+    
+        }
+        else aTeams[i].printTimes();
+    }
+    
     std::cout << std::endl;
     return 0;
 }
+
