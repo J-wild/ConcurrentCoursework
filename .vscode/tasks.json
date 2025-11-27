@@ -9,7 +9,11 @@
                 "-g",
                 "${file}",
                 "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+                "${fileDirname}\\${fileBasenameNoExtension}.exe",
+                "-I.",  // This tells the compiler to search in the current directory for tha ASIO files
+                "-lws2_32",   // This tells the linker to add the Winsock Windows library
+                "-lmswsock",   // This ?
+                "-D_WIN32_WINNT=0x0601"
             ],
             "options": {
                 "cwd": "${fileDirname}"

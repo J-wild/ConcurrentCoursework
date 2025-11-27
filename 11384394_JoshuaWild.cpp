@@ -15,13 +15,29 @@
 #include <array>
 #include <atomic>
 #include <vector>
-
+#include "asio.hpp"
 
 const int NUM_TEAMS = 4;     // number of teams in the race
 const int NUM_MEMBERS = 4;    // number of athletes in the team
 
 using namespace std;
+using asio::ip::address_v4;
+using udp = asio::ip::udp;
 
+
+asio::io_context io;
+udp::socket update_socket(io, udp::v4());
+udp::endpoint client_endpoint(asio::ip::make_address("127.0.0.1"), 8080);
+
+std::mutex GlobalMutex;
+void send_udp_update (const std::string& message) {
+     //Protect the shared socket access with a mutex
+    try {
+        update_socket.send_to(asio::buffer(message), client_endpoint);
+    } catch (std::exception& e) {
+        std::cerr << "UDP Send Error in thread: " << e.what() << std::endl;
+    }
+}
 
 
 // Data for team/athelete initialisation. The Women’s 4x100 meter relay at the Tokyo 2020 Olympics. The teams took between 41 and 42 seconds.
@@ -54,19 +70,16 @@ private:
 };
 
 
-
-
 //Part 1.2 Make thrd_print thread safe.  Instantiate a mutex here (global as it is shared between threads) and use it to protect the function using a std::lock_guard<std::mutex>
-std::mutex GlobalMutex;
 void thrd_print(const std::string& str) {  // Thread safe print
     std::lock_guard<mutex> lock(GlobalMutex);
     cout << str << std::flush;
+    send_udp_update(str);
 }
 
 barrier barrier_allthreads_started(1+(NUM_TEAMS * NUM_MEMBERS)); // Need all the thread to reach here before the start can continue.
 //Part 1.3 Create another barrier array and name it "barrier_go" which you will use to make all threads wait until the race official starts the race
 barrier barrier_go(1+(NUM_TEAMS * NUM_MEMBERS));
-
 //Part 2.1  Create a std::atomic variable of type bool, initalised to false and name it "winner". You will use it to ensure just the winning thread claims to have won the race.
 std::atomic <bool> winner;
 
@@ -93,7 +106,6 @@ void thd_runner_16x100m(Competitor& a, RandomTwister& generator) {
     thrd_print( a.getPerson() + " took " + std::to_string(fSprintDuration_seconds) + " seconds. ("+ a.getTeamName() + ")\n");
 }
 
-
 void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& generator, RandomTwister& Drop_Generator) {
     thrd_print(a.getPerson() + " ready, ");
     //Part 2.2 Copy the code from thd_runner_16x100m for
@@ -101,9 +113,6 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
         // barrier_go
     barrier_allthreads_started.arrive_and_wait();
     barrier_go.arrive_and_wait();
-
-
-    
     
     float Penalty = 0.0f;
     // If the competitor does not have a pointer to a previous competitor, then it must be the first runner of that team.
@@ -134,7 +143,7 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
             
             if (ProbOfDrop <= 0.2f && ProbOfDrop >= 0.05f){
                 Penalty = ProbOfDrop * 10;
-                thrd_print(a.getPerson() + "(" + a.getTeamName() + ")" + "Dropped the batton, adding a penalty of " + std::to_string(Penalty) +" Seconds \n" );
+                thrd_print(a.getPerson() + "(" + a.getTeamName() + ") " + "Dropped the batton, adding a penalty of " + std::to_string(Penalty) +" Seconds \n" );
             }
             
             if(ProbOfDrop <= 0.05f){
@@ -156,32 +165,25 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
     float fSprintDuration_seconds = generator.generate();
     int fSprintDuration_miliseconds = (fSprintDuration_seconds + Penalty) * 1000;
     std::this_thread::sleep_for(std::chrono::milliseconds(fSprintDuration_miliseconds));
-    
+     
     a.setTime(fSprintDuration_seconds + Penalty);
     thrd_print( "Leg "+ std::to_string(a.numBatonExchanges()) + ": "+a.getPerson() + " ran in " + std::to_string(fSprintDuration_seconds) + " seconds. ("+ a.getTeamName() + ")\n");
     if ( a.numBatonExchanges() == NUM_MEMBERS) // The last athlete in the team has crossed the finish line (crossing the line counts as a baton exchage)
     {
-        
         // Print "finished" only if this is the first thread to complete
         //Part 2.6 Use an atomic .exchange on the atomic "winner" object that you defined at the top of this code and use this in the line below
         if (!winner.exchange(true)) // Uncomment this line
         {
-            std::cout << "\n Team " << a.getTeamName() << " is the WINNER!" << std::endl;
+            thrd_print( "\nTeam " + a.getTeamName() +" is the WINNER! \n");
         }
-
-
     }
-    
-
 }
 
 bool isDisqualified(string team){
     for (auto j: DisqualifiedTeams){
         if (j == team) return true;
-
     }
     return false;
-
 }
 
 int main() {
@@ -191,10 +193,12 @@ int main() {
     float       afTeamTime_s[NUM_TEAMS];
 
     // Part 1.7   Change the random number generation to between 10 s and 12 s.  (you might want to do this later so you don't have to wait while you are debugging!)
-    RandomTwister randGen_sprint_time(0.5f, 1.0f);
-    RandomTwister randGen_drop_chance(0.0f, 0.5f);
+    RandomTwister randGen_sprint_time(10.0f, 12.0f);
+    RandomTwister randGen_drop_chance(0.0f, 1.0f);
+    RandomTwister randGen_gun_time(3.0f, 5.0f);
 
-    std::cout << "Re-run of the women’s 4x100 meter relay at the Tokyo 2020 Olympics.\n" << std::endl;
+    thrd_print("\nRe-run of the women's 4x100 meter relay at the Tokyo 2020 Olympics.\n");
+    
     // Start threads in each position of the 2D array
     for (int i = 0; i < NUM_TEAMS; ++i){
         //string strTeam = astrTeams[i];
@@ -226,7 +230,7 @@ int main() {
     thrd_print("\n\nThe race official raises her starting pistol...\n");
     //Part 2.8 Change this starter gun time from the fixed 3.5 seconds (next line) to a random value between 3 to 5 seconds.
 
-    RandomTwister randGen_gun_time(3.0f, 5.0f);
+    
     float fStarterGun_s = randGen_gun_time.generate();
 
     //Part 1.10 Sleep using std::this_thread::sleep_for function for the fStarterGun_s  (see advice on type conversion given above)
@@ -253,7 +257,11 @@ int main() {
             thrd_print( "Team "  + astrTeams[i] + " =  Disqalified \n");
     
         }
-        else aTeams[i].printTimes();
+        else{
+            
+            thrd_print("Team " + aTeams[i].getTeam() + " = " + std::to_string(aTeams[i].getTime()) + " s \n" );
+
+        }
     }
     
     std::cout << std::endl;
