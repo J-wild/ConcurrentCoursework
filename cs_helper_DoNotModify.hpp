@@ -14,7 +14,7 @@ using namespace std;
 class Team{
 private:
     string teamName;
-    float fTeamTime_s=0;
+    float fTeamTime_s= 0;
     int iNumBatonExchanges = 0;
     std::mutex mtx;   // Mutex is non-movable prior to C++17, so that you cannot use them in a C[] type array
 public:

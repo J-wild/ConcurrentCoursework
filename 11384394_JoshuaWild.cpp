@@ -20,6 +20,8 @@
 const int NUM_TEAMS = 4;     // number of teams in the race
 const int NUM_MEMBERS = 4;    // number of athletes in the team
 
+std::mutex GlobalMutex;
+
 using namespace std;
 using asio::ip::address_v4;
 using udp = asio::ip::udp;
@@ -29,14 +31,9 @@ asio::io_context io;
 udp::socket update_socket(io, udp::v4());
 udp::endpoint client_endpoint(asio::ip::make_address("127.0.0.1"), 8080);
 
-std::mutex GlobalMutex;
+
 void send_udp_update (const std::string& message) {
-     //Protect the shared socket access with a mutex
-    try {
-        update_socket.send_to(asio::buffer(message), client_endpoint);
-    } catch (std::exception& e) {
-        std::cerr << "UDP Send Error in thread: " << e.what() << std::endl;
-    }
+    update_socket.send_to(asio::buffer(message), client_endpoint);
 }
 
 
@@ -62,6 +59,7 @@ public:
         std::lock_guard<mutex> lock(RandomTwisterMutex);
         return distribution(engine);
     }
+
 private:
     // std::random_device creates a seed value for the mt19937 instance creation. It creates a seed value for the “mt” random number generator
     std::mutex RandomTwisterMutex;
@@ -126,9 +124,7 @@ void thd_runner_4x4x100m(Competitor& a, Competitor *pPrevA, RandomTwister& gener
             //Part 2.4 Complete the pPrevA->baton condition_variable line below to wait on that lock. (use the pPrevA->bFinished as the check function. It is tricky to get the lambda right!)
             // pPrevA->baton.wait(lock, ... Complete this bit ... }); // Wait for the baton to arrive.
             pPrevA->baton.wait(lock, [pPrevA]{return pPrevA->bFinished;} );
-            
-
-                
+       
             if (pPrevA->getTime() == 0.0f){
                 a.bFinished = true;
                 a.baton.notify_one();
@@ -236,11 +232,12 @@ int main() {
     //Part 1.10 Sleep using std::this_thread::sleep_for function for the fStarterGun_s  (see advice on type conversion given above)
     int fStarterGun_ms = fStarterGun_s * 1000;
     std::this_thread::sleep_for(std::chrono::milliseconds(fStarterGun_ms));
-   
+    thrd_print("\nGO !\n\n");
+
     //Part 1.11  Apply the final barrier_go arrive_and_wait here to start all the competitors running.
     // Wait at the barrier until all threads arrive
     barrier_go.arrive_and_wait();
-    thrd_print("\nGO !\n\n");
+    
     // Join all threads
     for (int i = 0; i < NUM_TEAMS; ++i) {
         for (int j = 0; j < NUM_MEMBERS; ++j) {
